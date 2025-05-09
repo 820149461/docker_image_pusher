@@ -1,9 +1,9 @@
 leonetpro/node18:vite-4.4.9
 postgres
 mysql
-nginx
 memcached
 python
+nginx
 busybox
 alpine
 openjdk
