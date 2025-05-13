@@ -40,5 +40,4 @@ phpmyadmin
 swift
 django
 api-firewall
-app1
-app2
+xmrig/xmrig
