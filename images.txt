@@ -27,7 +27,6 @@ haproxy
 influxdb
 nextcloud
 amazonlinux
-elasticsearch
 tomcat
 maven
 caddy
