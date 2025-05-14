@@ -22,7 +22,6 @@ ruby
 wordpress
 debian
 php
-centos
 sonarqube
 haproxy
 influxdb
