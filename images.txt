@@ -25,7 +25,6 @@ php
 sonarqube
 haproxy
 influxdb
-consul
 nextcloud
 amazonlinux
 elasticsearch
