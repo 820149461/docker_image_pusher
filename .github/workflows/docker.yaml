@@ -7,7 +7,6 @@ on:
   schedule:
     - cron: '0 23 * * *'
 
-
 env:
   ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
   ALIYUN_NAME_SPACE: "${{ secrets.ALIYUN_NAME_SPACE }}"
@@ -15,17 +14,14 @@ env:
   ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
 
 jobs:
-
   build:
     name: Pull
     runs-on: ubuntu-latest
     steps:
     - name: Docker Setup Buildx
       uses: docker/setup-buildx-action@v3
-
     - name: Checkout Code
       uses: actions/checkout@v4
-
     - name: Build and push image Aliyun
       run: |
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
@@ -61,11 +57,17 @@ jobs:
             fi       
         done < images.txt
         
-        
+        error_images=()
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             echo "docker pull $line"
             docker pull $line
+            pull_status=$?
+            if [ $pull_status -ne 0 ]; then
+                echo "Failed to pull image: $line"
+                error_images+=("$line")
+                continue
+            fi
             # 修正：正确提取platform参数
             platform=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i ~ /^--platform=/) print substr($i, 12)}')
             echo "platform is $platform"
@@ -100,3 +102,9 @@ jobs:
             echo "docker push $new_image"
             docker push $new_image
         done < images.txt
+        if [ ${#error_images[@]} -gt 0 ]; then
+            echo "The following images failed to pull:"
+            for failed_image in "${error_images[@]}"; do
+                echo "$failed_image"
+            done
+        fi
