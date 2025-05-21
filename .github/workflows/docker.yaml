@@ -46,7 +46,7 @@ jobs:
         # 初始化变量
         declare -A conflictingImages  # 记录名称冲突的镜像（键：镜像名，值：是否冲突）
         declare -A namespaceMap       # 记录镜像名对应的原始命名空间（用于冲突检测）
-        errorImages=()                # 记录处理失败的镜像（去掉 local 关键字）
+        errorImages=()                # 记录处理失败的镜像
 
         # 函数：提取镜像基础信息（名称、标签、原始命名空间）
         extract_image_info() {
@@ -66,9 +66,9 @@ jobs:
           [[ "$line" =~ ^#.* ]] && continue
           
           # 提取镜像（忽略--platform参数）
-          local image=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i !~ /^--platform=/) image=$i; print image}')
-          # 提取镜像信息
-          local nameTag namespace name tag
+          image=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i !~ /^--platform=/) image=$i; print image}')
+          # 提取镜像信息（去掉 local 关键字）
+          nameTag namespace name tag
           read -r nameTag namespace name tag <<< "$(extract_image_info "$image")"
 
           # 冲突检测逻辑
