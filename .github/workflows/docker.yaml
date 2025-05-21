@@ -1,108 +1,140 @@
-name: Docker
+name: Docker Image Sync to Aliyun
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
   schedule:
-    - cron: '0 23 * * *'
+    - cron: '0 23 * * *'  # 每日 UTC 23:00（北京时间 7:00）
 
 env:
-  ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
-  ALIYUN_NAME_SPACE: "${{ secrets.ALIYUN_NAME_SPACE }}"
-  ALIYUN_REGISTRY_USER: "${{ secrets.ALIYUN_REGISTRY_USER }}"
-  ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
+  ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAME_SPACE }}
+  ALIYUN_USER: ${{ secrets.ALIYUN_REGISTRY_USER }}
+  ALIYUN_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+  IMAGE_LIST_FILE: "images.txt"  # 集中管理镜像列表文件路径
 
 jobs:
-  build:
-    name: Pull
+  sync-images:
+    name: Sync Docker Images to Aliyun
     runs-on: ubuntu-latest
+    permissions:
+      contents: read  # 仅需读取代码权限
+
     steps:
-    - name: Docker Setup Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Checkout Code
+    - name: Checkout Repository
       uses: actions/checkout@v4
-    - name: Build and push image Aliyun
+      with:
+        fetch-depth: 1  # 仅获取最新提交，减少下载量
+
+    - name: Set Up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        install: true  # 确保安装 Buildx
+
+    - name: Login to Aliyun Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.ALIYUN_REGISTRY }}
+        username: ${{ env.ALIYUN_USER }}
+        password: ${{ env.ALIYUN_PASSWORD }}
+
+    - name: Process Image List
       run: |
-        docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
-        # 数据预处理,判断镜像是否重名
-        declare -A duplicate_images
-        declare -A temp_map
+        set -euo pipefail  # 严格错误处理：遇到未定义变量/命令失败立即终止
+
+        # 初始化变量
+        declare -A conflictingImages  # 记录名称冲突的镜像（键：镜像名，值：是否冲突）
+        declare -A namespaceMap       # 记录镜像名对应的原始命名空间（用于冲突检测）
+        local errorImages=()          # 记录处理失败的镜像
+
+        # 函数：提取镜像基础信息（名称、标签、原始命名空间）
+        extract_image_info() {
+          local image="$1"
+          local nameTag=$(basename "$image")        # 格式：name:tag
+          local namespace=$(dirname "$image" | cut -d/ -f1)  # 原始命名空间（可能为空）
+          local name=$(echo "$nameTag" | cut -d: -f1)
+          local tag=$(echo "$nameTag" | cut -d: -f2-)
+          echo "$nameTag $namespace $name $tag"     # 输出：标签名 命名空间 镜像名 标签
+        }
+
+        # 第一步：检测镜像名称冲突（不同命名空间下的同名镜像）
+        echo "🔍 开始检测镜像名称冲突..."
         while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            image=$(echo "$line" | awk '{print $NF}')
-            image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
-            name_space=$(echo "$image" | awk -F'/' '{if (NF>1) print $1}'| awk '{print $1}')
-            name_space="${name_space}_"
-            image_name=$(echo "$image_name_tag" | awk -F':' '{print $1}')
-            
-            if [[ -n "${temp_map[$image_name]}" ]]; then
-                 if [[ "${temp_map[$image_name]}" != $name_space  ]]; then
-                    echo "duplicate image name: $image_name"
-                    duplicate_images[$image_name]="true"
-                 fi
-            else
-                temp_map[$image_name]=$name_space
-            fi       
-        done < images.txt
-        
-        # 存储错误镜像的数组
-        error_images=()
-        
+          [[ -z "$line" ]] && continue
+          # 忽略注释行（以#开头）
+          [[ "$line" =~ ^#.* ]] && continue
+          
+          # 提取镜像（忽略--platform参数）
+          local image=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i !~ /^--platform=/) image=$i; print image}')
+          # 提取镜像信息
+          local nameTag namespace name tag
+          read -r nameTag namespace name tag <<< "$(extract_image_info "$image")"
+
+          # 冲突检测逻辑
+          if [[ -n "${namespaceMap[$name]}" ]]; then
+            if [[ "${namespaceMap[$name]}" != "$namespace" ]]; then
+              conflictingImages["$name"]=true
+              echo "⚠️ 检测到名称冲突镜像: $name（原命名空间: ${namespaceMap[$name]}, 当前: $namespace）"
+            fi
+          else
+            namespaceMap["$name"]="$namespace"
+          fi
+        done < "$IMAGE_LIST_FILE"
+
+        # 第二步：处理每个镜像（拉取、打标签、推送）
+        echo "🚀 开始处理镜像列表..."
         while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            echo "Processing image: $line"
-            
-            # 提取镜像名称（忽略--platform参数）
-            image=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i !~ /^--platform=/) image=$i; print image}')
-            
-            # 尝试拉取镜像并捕获错误
-            if ! docker pull "$image"; then
-                echo "❌ Error pulling image: $image" >&2
-                error_images+=("$image")
-                continue
-            fi
-            
-            # 提取platform参数
-            platform=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i ~ /^--platform=/) print substr($i, 12)}')
-            platform_prefix="${platform//\//_}_"
-            
-            # 构建新镜像名称
-            image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
-            name_space=$(echo "$image" | awk -F'/' '{if (NF>1) print $1}'| awk '{print $1}')
-            image_name=$(echo "$image_name_tag" | awk -F':' '{print $1}')
-            
-            name_space_prefix=""
-            if [[ -n "${duplicate_images[$image_name]}" && -n "$name_space" ]]; then
-                name_space_prefix="${name_space}_"
-            fi
-            
-            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name_tag"
-            
-            # 标记并推送镜像（添加错误处理）
-            if ! docker tag "$image" "$new_image"; then
-                echo "❌ Error tagging image: $image as $new_image" >&2
-                error_images+=("$image")
-                continue
-            fi
-            
-            if ! docker push "$new_image"; then
-                echo "❌ Error pushing image: $new_image" >&2
-                error_images+=("$new_image")
-                continue
-            fi
-            
-            echo "✅ Successfully processed: $new_image"
-        done < images.txt
-        
-        # 输出所有错误镜像
-        if [ ${#error_images[@]} -gt 0 ]; then
-            echo "========================================"
-            echo "⚠️ Failed to process ${#error_images[@]} images:"
-            for img in "${error_images[@]}"; do
-                echo "- $img"
-            done
-            exit 1 # 可选：让工作流标记为失败
+          [[ -z "$line" ]] && continue
+          [[ "$line" =~ ^#.* ]] && continue  # 跳过注释行
+
+          echo -e "\n🔧 处理镜像行: $line"
+          local platform=$(echo "$line" | grep -oP -- '--platform=\K\S+')  # 提取platform参数（更可靠）
+          local image=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i !~ /^--platform=/) image=$i; print image}')
+
+          # 提取镜像信息
+          local nameTag namespace name tag
+          read -r nameTag namespace name tag <<< "$(extract_image_info "$image")"
+
+          # 步骤1：拉取镜像（支持多平台）
+          echo "⏬ 拉取镜像: $image"
+          if ! docker pull --platform "${platform:-linux/amd64}" "$image"; then
+            echo "❌ 拉取失败: $image"
+            errorImages+=("$image")
+            continue
+          fi
+
+          # 步骤2：生成新镜像标签（考虑平台、命名空间冲突）
+          local platformPrefix=${platform//\//_}_
+          local namespacePrefix=""
+          [[ -n "${conflictingImages[$name]}" && -n "$namespace" ]] && namespacePrefix="${namespace}_"
+          local newImage="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${platformPrefix}${namespacePrefix}${nameTag}"
+
+          # 步骤3：打标签（避免重复标签导致错误）
+          echo "🏷️ 打标签: $image → $newImage"
+          if ! docker tag "$image" "$newImage"; then
+            echo "❌ 打标签失败: $image → $newImage"
+            errorImages+=("$image")
+            continue
+          fi
+
+          # 步骤4：推送镜像（启用压缩提高速度）
+          echo "🚀 推送镜像: $newImage"
+          if ! docker push --quiet "$newImage"; then  # --quiet 减少日志输出
+            echo "❌ 推送失败: $newImage"
+            errorImages+=("$newImage")
+            continue
+          fi
+
+          echo "✅ 成功处理: $newImage"
+        done < "$IMAGE_LIST_FILE"
+
+        # 最终结果汇总
+        echo -e "\n========================================"
+        if [[ ${#errorImages[@]} -gt 0 ]]; then
+          echo "⚠️ 处理失败（${#errorImages[@]} 个镜像）:"
+          printf -- "- %s\n" "${errorImages[@]}"
+          exit 1  # 标记工作流失败
         else
-            echo "🎉 All images processed successfully!"
+          echo "🎉 所有镜像处理成功！"
         fi
