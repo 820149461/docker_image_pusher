@@ -46,7 +46,7 @@ jobs:
         # 初始化变量
         declare -A conflictingImages  # 记录名称冲突的镜像（键：镜像名，值：是否冲突）
         declare -A namespaceMap       # 记录镜像名对应的原始命名空间（用于冲突检测）
-        local errorImages=()          # 记录处理失败的镜像
+        errorImages=()                # 记录处理失败的镜像（去掉 local 关键字）
 
         # 函数：提取镜像基础信息（名称、标签、原始命名空间）
         extract_image_info() {
