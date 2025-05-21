@@ -67,8 +67,7 @@ jobs:
           
           # 提取镜像（忽略--platform参数）
           image=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i !~ /^--platform=/) image=$i; print image}')
-          # 提取镜像信息（去掉 local 关键字）
-          nameTag namespace name tag
+          # 提取镜像信息（去掉多余行）
           read -r nameTag namespace name tag <<< "$(extract_image_info "$image")"
 
           # 冲突检测逻辑
@@ -93,7 +92,6 @@ jobs:
           local image=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if ($i !~ /^--platform=/) image=$i; print image}')
 
           # 提取镜像信息
-          local nameTag namespace name tag
           read -r nameTag namespace name tag <<< "$(extract_image_info "$image")"
 
           # 步骤1：拉取镜像（支持多平台）
